@@ -3,40 +3,41 @@
  *  Displays set voltage and current as well as active voltage and current.
  *  
  *  Physical design of the baord limits the minimum current limit to ~200mA and the measurable current to ~150mA.
- *  
- * 
- * 
- * 
+ *  Using freetronics LCD shield, requires pin 9 to be rerouted to pin 11.
  */
 
+// set up lcd display
 #include <Wire.h>
 #include <LiquidCrystal.h>
 LiquidCrystal lcd( 8, 11, 4, 5, 6, 7 );
 
+// define IO
 #define BUTTONS_PIN 0
-#define CURRENT_SENSE_PIN A2
-#define VOLTAGE_SENSE_PIN A3
-#define CURRENT_CONTROL_PIN 9
-#define VOLTAGE_CONTROL_PIN 10
+#define I_SENSE_PIN A2
+#define V_SENSE_PIN A3
+#define I_CTRL_PIN 9
+#define V_CTRL_PIN 10
 
+// define each button press
 #define RIGHT 1
 #define UP 2
 #define DOWN 3
 #define LEFT 4
 #define SELECT 5
 
+// function prototypes
 void update_set_display(int current, int voltage);
-
 void update_active_display(int current, int voltage);
-
 int get_button(int pin);
+long map_array(long value, long *mapping_array);
 
 void setup() {
     lcd.begin(16, 2);
 
-    pinMode(CURRENT_CONTROL_PIN, OUTPUT);
-    pinMode(VOLTAGE_CONTROL_PIN, OUTPUT);
+    pinMode(I_CTRL_PIN, OUTPUT);
+    pinMode(V_CTRL_PIN, OUTPUT);
 
+    // set 10 bit pwm to increase the resolution of the voltage and current
     // set pwm clock divider
     TCCR1B &= ~(1 << CS12);
     TCCR1B  |=   (1 << CS11);
@@ -51,82 +52,115 @@ void setup() {
 }
 
 void loop() {
-  
+
+  // initialise local variables for averaging out the voltage and current readings
   const int NUM_READINGS = 30;
   int read_index = 0;
   
-  int current_readings[NUM_READINGS];
-  int current_read_total = 0;
-  int current_read_average = 0;
+  int i_readings[NUM_READINGS];
+  int i_read_total = 0;
+  int i_read_average = 0;
   
-  int voltage_readings[NUM_READINGS];
-  int voltage_read_total = 0;
-  int voltage_read_average = 0;
+  int v_readings[NUM_READINGS];
+  int v_read_total = 0;
+  int v_read_average = 0;
   
-  int current;
-  int voltage;
+  int i_disp;
+  int v_disp;
 
-  int current_control = 180;
-  int voltage_control = 9000;
+  // initial startup values for current and voltage
+  int i_ctrl = 200;
+  int v_ctrl = 700;
 
+  // mapping values for the mV/mA->pwm and adc->mV/mA
+  long i_disp_map[] = {130, 960, 130, 1000};
+  long v_disp_map[] = {70, 930, 700, 9070};
+  long i_ctrl_map[] = {172, 1000, 148, 880};
+  long v_ctrl_map[] = {700, 9070,61, 940};
+
+  // values for debouncing the button presses
+  unsigned long last_debounce_time = 0;
+  const int DEBOUNCE_DELAY = 50;
+  int last_button_state = 0;
+  int button_state;
+
+  // counter for updating the display at a certain frequency
+  const int DISP_DELAY = 15;
+  unsigned long disp_time;
+  unsigned long last_disp_time = 0;
+
+  // clear the current and voltage reading arrays to zero
   for (int i = 0; i < NUM_READINGS; i++) {
-    current_readings[i] = 0;
-    voltage_readings[i] = 0;
+    i_readings[i] = 0;
+    v_readings[i] = 0;
     }
 
   for(;;){
-    
-    current_read_total -= current_readings[read_index];
-    voltage_read_total -= voltage_readings[read_index];
-    
-    current_readings[read_index] = analogRead(CURRENT_SENSE_PIN);
-    voltage_readings[read_index] = analogRead(VOLTAGE_SENSE_PIN);
-  
-    current_read_total += current_readings[read_index];
-    voltage_read_total += voltage_readings[read_index];
-  
+
+    // subtract the last values from the total
+    i_read_total -= i_readings[read_index];
+    v_read_total -= v_readings[read_index];
+
+    // take new readings and place them in the arrays
+    i_readings[read_index] = analogRead(I_SENSE_PIN);
+    v_readings[read_index] = analogRead(V_SENSE_PIN);
+
+    // add the new readings to the totals
+    i_read_total += i_readings[read_index];
+    v_read_total += v_readings[read_index];
+
+    // increment and loop over the length of the arrays
     read_index++;
-  
     if (read_index >= NUM_READINGS)
       read_index = 0;
-  
-    current_read_average = current_read_total / NUM_READINGS;
-    voltage_read_average = voltage_read_total / NUM_READINGS;
-  
-    current = map(current_read_average, 130, 960, 130, 1000);
-    voltage = map(voltage_read_average, 70, 930,700, 9070);
 
-    lcd.clear();
-    update_set_display(current_control, voltage_control);
-    
-    if (current <= 150){
-      update_active_display(0,voltage);
-    }
-    else{
-      update_active_display(current,voltage);
+    // take the average of the current totals
+    i_read_average = i_read_total / NUM_READINGS;
+    v_read_average = v_read_total / NUM_READINGS;
+
+    // get the correct values to display.
+    i_disp = map_array(i_read_average, i_disp_map);
+    v_disp = map_array(v_read_average, v_disp_map);
+
+
+    if ((millis() - last_disp_time) > DISP_DELAY){
+      lcd.clear();
+      update_set_display(i_ctrl, v_ctrl);
+      
+      if (i_disp <= 150){
+        update_active_display(0,v_disp);
+      }
+      else{
+        update_active_display(i_disp,v_disp);
+      }
+      last_disp_time = millis();
     }
 
-    if(get_button(BUTTONS_PIN) == UP && voltage_control < 10000){
-      voltage_control += 100;
-      delay(200);
+    int button_reading = get_button(BUTTONS_PIN);
+
+    if (button_reading != last_button_state){
+      last_debounce_time = millis();
     }
-    else if (get_button(BUTTONS_PIN) == DOWN && voltage_control > 700){
-      voltage_control -= 100;
-      delay(200);
-    }
-    else if (get_button(BUTTONS_PIN) == LEFT && current_control > 180){
-      current_control -= 10;
-      delay(200);
-    }
-    else if (get_button(BUTTONS_PIN) == RIGHT && current_control < 1000){
-      current_control += 10;
-      delay(200);
+
+    if((millis() - last_debounce_time) > DEBOUNCE_DELAY){
+      if (button_reading != button_state){
+        button_state = button_reading;
+        if(button_state == UP && v_ctrl < 10000)
+          v_ctrl += 100;
+        else if (button_state == DOWN && v_ctrl > 700)
+          v_ctrl -= 100;
+        else if (button_state == LEFT && i_ctrl> 200)
+          i_ctrl -= 10;
+        else if (button_state == RIGHT && i_ctrl < 1000)
+          i_ctrl += 10;
+      }
     }
     
-    analogWrite(CURRENT_CONTROL_PIN, map(current_control,172, 1000, 148, 880));
-    analogWrite(VOLTAGE_CONTROL_PIN, map(voltage_control, 700, 9070,61, 940));
+    last_button_state = button_reading;
+    
+    analogWrite(I_CTRL_PIN, map_array(i_ctrl, i_ctrl_map));
+    analogWrite(V_CTRL_PIN, map_array(v_ctrl, v_ctrl_map));
   
-    delay(15);
   }
 }
 
@@ -155,6 +189,7 @@ void update_set_display(int current, int voltage){
     lcd.print("mA ");
   }
 }
+
 void update_active_display(int current, int voltage){
   lcd.setCursor(9, 0);
   voltage = (voltage/10)*10;
@@ -200,5 +235,9 @@ int get_button(int pin){
   else
     button_num = 0;
   return button_num;
+}
+
+long map_array(long value, long *mapping_array){
+  return (value - mapping_array[0]) * (mapping_array[3] - mapping_array[2]) / (mapping_array[1]- mapping_array[0]) + mapping_array[2];
 }
 

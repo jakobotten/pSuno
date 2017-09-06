@@ -1,3 +1,14 @@
+/*  pSuno power supply arduino code.
+ *   
+ *  Displays set voltage and current as well as active voltage and current.
+ *  
+ *  Physical design of the baord limits the minimum current limit to ~200mA and the measurable current to ~150mA.
+ *  
+ * 
+ * 
+ * 
+ */
+
 #include <Wire.h>
 #include <LiquidCrystal.h>
 LiquidCrystal lcd( 8, 11, 4, 5, 6, 7 );

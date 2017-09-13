@@ -9,7 +9,7 @@
 // set up lcd display
 #include <Wire.h>
 #include <LiquidCrystal.h>
-LiquidCrystal lcd( 8, 11, 4, 5, 6, 7 );
+LiquidCrystal lcd( 12, 11, 4, 5, 6, 7 );
 
 // define IO
 #define BUTTONS_PIN 0
@@ -17,6 +17,7 @@ LiquidCrystal lcd( 8, 11, 4, 5, 6, 7 );
 #define V_SENSE_PIN A3
 #define I_CTRL_PIN 9
 #define V_CTRL_PIN 10
+#define RELAY_PIN 8
 
 // define each button press
 #define RIGHT 1
@@ -30,12 +31,14 @@ void update_set_display(int current, int voltage);
 void update_active_display(int current, int voltage);
 int get_button(int pin);
 long map_array(long value, long *mapping_array);
+long third_order_map( long x);
 
 void setup() {
     lcd.begin(16, 2);
 
     pinMode(I_CTRL_PIN, OUTPUT);
     pinMode(V_CTRL_PIN, OUTPUT);
+    pinMode(RELAY_PIN, OUTPUT);
 
     // set 10 bit pwm to increase the resolution of the voltage and current
     // set pwm clock divider
@@ -54,16 +57,16 @@ void setup() {
 void loop() {
 
   // initialise local variables for averaging out the voltage and current readings
-  const int NUM_READINGS = 30;
+  const int NUM_READINGS = 300;
   int read_index = 0;
   
   int i_readings[NUM_READINGS];
-  int i_read_total = 0;
-  int i_read_average = 0;
+  long i_read_total = 0;
+  long i_read_average = 0;
   
   int v_readings[NUM_READINGS];
-  int v_read_total = 0;
-  int v_read_average = 0;
+  long v_read_total = 0;
+  long v_read_average = 0;
   
   int i_disp;
   int v_disp;
@@ -75,7 +78,7 @@ void loop() {
   // mapping values for the mV/mA->pwm and adc->mV/mA
   long i_disp_map[] = {130, 960, 130, 1000};
   long v_disp_map[] = {70, 930, 700, 9070};
-  long i_ctrl_map[] = {172, 1000, 148, 880};
+  long i_ctrl_map[] = {172, 1000, 148, 890};
   long v_ctrl_map[] = {700, 9070,61, 940};
 
   // values for debouncing the button presses
@@ -83,6 +86,7 @@ void loop() {
   const int DEBOUNCE_DELAY = 50;
   int last_button_state = 0;
   int button_state;
+  bool relay_is_on = false;
 
   // counter for updating the display at a certain frequency
   const int DISP_DELAY = 15;
@@ -124,13 +128,17 @@ void loop() {
 
 
     if ((millis() - last_disp_time) > DISP_DELAY){
-      lcd.clear();
-      update_set_display(i_ctrl, v_ctrl);
-      
-      if (i_disp <= 150){
+      lcd.clear();  
+      if (v_disp <= 20){
+        update_set_display(i_ctrl, v_ctrl);
+        update_active_display(0,0);
+      }
+      else if (i_disp <= 150){
+        update_set_display(i_ctrl, v_ctrl);
         update_active_display(0,v_disp);
       }
       else{
+        update_set_display(i_ctrl, v_ctrl);
         update_active_display(i_disp,v_disp);
       }
       last_disp_time = millis();
@@ -145,7 +153,7 @@ void loop() {
     if((millis() - last_debounce_time) > DEBOUNCE_DELAY){
       if (button_reading != button_state){
         button_state = button_reading;
-        if(button_state == UP && v_ctrl < 10000)
+        if(button_state == UP && v_ctrl < 9800)
           v_ctrl += 100;
         else if (button_state == DOWN && v_ctrl > 700)
           v_ctrl -= 100;
@@ -153,13 +161,26 @@ void loop() {
           i_ctrl -= 10;
         else if (button_state == RIGHT && i_ctrl < 1000)
           i_ctrl += 10;
+        else if (button_state == SELECT){
+          relay_is_on = !relay_is_on;
+          digitalWrite(RELAY_PIN, relay_is_on);
+          
+        }
       }
     }
     
     last_button_state = button_reading;
     
     analogWrite(I_CTRL_PIN, map_array(i_ctrl, i_ctrl_map));
-    analogWrite(V_CTRL_PIN, map_array(v_ctrl, v_ctrl_map));
+    if (relay_is_on)
+      analogWrite(V_CTRL_PIN, map_array(v_ctrl, v_ctrl_map));
+    else
+      analogWrite(V_CTRL_PIN, 0);
+    
+    
+    //long result = third_order_map(v_ctrl);
+    //analogWrite(V_CTRL_PIN, map_array(result, v_ctrl_map));
+    //analogWrite(I_CTRL_PIN, third_order_map(v_ctrl));
   
   }
 }
@@ -239,5 +260,10 @@ int get_button(int pin){
 
 long map_array(long value, long *mapping_array){
   return (value - mapping_array[0]) * (mapping_array[3] - mapping_array[2]) / (mapping_array[1]- mapping_array[0]) + mapping_array[2];
+}
+long third_order_map( long x){
+  float x_f = (float)x;
+  float y = pow(x_f,3)*(5e-9) - pow(x_f,2)*(8e-5) + (x_f)*1.3389 - 223.52;
+  return (long)y;
 }
 
